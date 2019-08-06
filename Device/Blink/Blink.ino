@@ -1,61 +1,134 @@
 // https://www.makearduino.com/article/6/stm32-arduino-%E0%B9%80%E0%B8%88%E0%B8%B2%E0%B8%B0%E0%B8%A5%E0%B8%B6%E0%B8%81-pwm-timer
 
-uint16_t frequency[] = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 300, 400, 500, 900, 0};                     // in Hz
-uint16_t duration[] = {100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 0}; // in us
-uint8_t iFreq = 0;
-uint8_t iDura = 0;
+#define WORKING_PIN PA6
+#define AIMING_PIN PA7
+#define LASER_PIN PB6
+#define BTN_PIN PB15
 
-// the setup function runs once when you press reset or power the board
+uint16_t setFreq = 0;
+uint16_t setDura = 0;
+uint8_t setMode = 0;
+uint8_t setWorking = 0;
+uint8_t setAiming = 0;
+
+uint16_t setOnTime = 100;
+uint16_t setOffTime = 100;
+
+bool enable = false;
+uint64_t startTime = 0;
+
+bool lastBTNstage = LOW;
+
 void setup() {
-  pinMode(PA0, INPUT_PULLDOWN);
-  pinMode(PA1, INPUT_PULLDOWN);
-  pinMode(PA2, INPUT_PULLDOWN);
-  pinMode(PA3, INPUT_PULLDOWN);
+  Serial.begin(115200);
 
-  pinMode(PB6,PWM);
+  pinMode(LASER_PIN, PWM);
+  pwmWrite(LASER_PIN, 0);
 
-  Timer3.setPrescaleFactor(2);
-  pinMode(PA6,PWM);
+  pinMode(WORKING_PIN, PWM);
+  pinMode(AIMING_PIN, PWM);
+  pwmWrite(WORKING_PIN, 0);
+  pwmWrite(AIMING_PIN, 0);
 
-  setTimer();
+  pinMode(BTN_PIN, INPUT_PULLDOWN);
 }
 
-// the loop function runs over and over again forever
 void loop() {
-  if (digitalRead(PA0)) {
-    iDura++;
-    if (duration[iDura] == 0) iDura--;
-    delay(300);
-    setTimer();
-  }
-  if (digitalRead(PA1)) {
-    if (iDura == 0) iDura++;
-    iDura--;
-    delay(300);
-    setTimer();
+  if (Serial.available()) {
+    char inByte = Serial.read();
+    switch(inByte) {
+      case 'd': case 'D':
+        setDura = getNum();
+        break;
+        
+      case 'f': case 'F':
+        setFreq = getNum();
+        break;
+        
+      case 'm': case 'M':
+        setMode = getNum() % 3;
+        break;
+        
+      case 'e': case 'E':
+        enable = getNum() != 0;
+        if (enable) setTimer();
+        else pwmWrite(LASER_PIN,0);
+        break;
+
+      case 'w': case 'W':
+        setWorking = getNum() % 101;
+        pwmWrite(WORKING_PIN, map(setWorking, 0, 100, 0, 65535));
+        break;
+
+      case 'a': case 'A':
+        setAiming = getNum() % 101;
+        pwmWrite(AIMING_PIN, map(setAiming, 0, 100, 0, 65535));
+        break;
+        
+      case '+':
+        setOnTime = getNum();
+        break;
+      case '-':
+        setOffTime = getNum();
+        break;
+    }
   }
 
-  if (digitalRead(PA2)) {
-    iFreq++;
-    if (frequency[iFreq] == 0) iFreq--;
-    delay(300);
-    setTimer();
+  if (!enable) return;
+  
+  bool BTNstage = getBtn();
+  if (!BTNstage) {
+    pwmWrite(LASER_PIN,0);
+    lastBTNstage = BTNstage;
+    return;
+  } else if (!lastBTNstage) {
+    startTime = millis();
   }
-  if (digitalRead(PA3)) {
-    if (iFreq == 0) iFreq++;
-    iFreq--;
-    delay(300);
-    setTimer();
+  
+  switch(setMode) {
+    case 0:
+      if (millis() - startTime < 900)
+        pwmWrite(LASER_PIN, map(setDura, 0, 1000000 / setFreq, 0, Timer4.getOverflow()));
+      else pwmWrite(LASER_PIN, 0);
+      break;
+    case 1:
+      pwmWrite(LASER_PIN, map(setDura, 0, 1000000 / setFreq, 0, Timer4.getOverflow()));
+      break;
+    case 2:
+      if ((int64_t)((millis() - startTime) % (setOnTime + setOffTime)) - setOnTime < 0) {
+        pwmWrite(LASER_PIN, map(setDura, 0, 1000000 / setFreq, 0, Timer4.getOverflow()));
+      } else {
+        pwmWrite(LASER_PIN, 0);
+      }
+      delay(1);
   }
+
+  lastBTNstage = BTNstage;
+}
+
+uint64_t lastBTN = 0;
+bool getBtn() {
+  bool BTNstage = digitalRead(BTN_PIN);
+  if (millis() - lastBTN <= 50) return HIGH;
+  else {
+    if (BTNstage) lastBTN = millis();
+    else lastBTN = 0;
+    return BTNstage;
+  }
+}
+
+uint64_t getNum() {
+  uint64_t in = 0;
+  while(Serial.available()) {
+    in *= 10;
+    in += Serial.read() - '0';
+  }
+  return in;
 }
 
 void setTimer() {
-  uint32_t prescaleFactor = 1;
-  prescaleFactor = ((long double)F_CPU / 65536.0 / frequency[iFreq]) + 1;
+  if (setFreq == 0) return;
+  uint32_t prescaleFactor = ((long double)F_CPU / 65536.0 / setFreq) + 1;
   Timer4.setPrescaleFactor(prescaleFactor);
-  Timer4.setOverflow(F_CPU / (frequency[iFreq] * prescaleFactor));
-
-  pwmWrite(PB6,map(duration[iDura], 0, 1000000 / frequency[iFreq], 0, Timer4.getOverflow()));
-
-  pwmWrite(PA6,map(duration[iDura], 0, 1600, 0, 65535));
+  Timer4.setOverflow(F_CPU / (setFreq * prescaleFactor));
 }
