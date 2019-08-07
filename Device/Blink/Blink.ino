@@ -5,19 +5,19 @@
 #define LASER_PIN PB6
 #define BTN_PIN PB15
 
-uint16_t setFreq = 0;
-uint16_t setDura = 0;
-uint8_t setMode = 0;
-uint8_t setWorking = 0;
-uint8_t setAiming = 0;
+uint16_t setFreq = 0;   // Max 65535
+uint16_t setDura = 0;   // Max 65535
+uint8_t setMode = 0;    // Val 0 - 2
+uint8_t setWorking = 0; // Val 0 - 100
+uint8_t setAiming = 0;  // Val 0 - 100
 
-uint16_t setOnTime = 100;
-uint16_t setOffTime = 100;
+uint16_t setOnTime = 100;   // Max 65535
+uint16_t setOffTime = 100;  // Max 65535
 
 bool enable = false;
-uint64_t startTime = 0;
-
 bool lastBTNstage = LOW;
+uint64_t startTime = 0;
+uint16_t pwmDuty = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -51,7 +51,10 @@ void loop() {
         
       case 'e': case 'E':
         enable = getNum() != 0;
-        if (enable) setTimer();
+        if (enable) {
+          setTimer();
+          pwmDuty = map(setDura, 0, 1000000 / setFreq, 0, Timer4.getOverflow());
+        }
         else pwmWrite(LASER_PIN,0);
         break;
 
@@ -77,30 +80,26 @@ void loop() {
   if (!enable) return;
   
   bool BTNstage = getBtn();
-  if (!BTNstage) {
+  if (!BTNstage) {              // Not press
     pwmWrite(LASER_PIN,0);
     lastBTNstage = BTNstage;
     return;
-  } else if (!lastBTNstage) {
+  } else if (!lastBTNstage) {   // Press but not before
     startTime = millis();
   }
   
   switch(setMode) {
     case 0:
-      if (millis() - startTime < 900)
-        pwmWrite(LASER_PIN, map(setDura, 0, 1000000 / setFreq, 0, Timer4.getOverflow()));
+      if (millis() - startTime < 900) pwmWrite(LASER_PIN, pwmDuty);
       else pwmWrite(LASER_PIN, 0);
       break;
     case 1:
-      pwmWrite(LASER_PIN, map(setDura, 0, 1000000 / setFreq, 0, Timer4.getOverflow()));
+      pwmWrite(LASER_PIN, pwmDuty);
       break;
     case 2:
-      if ((int64_t)((millis() - startTime) % (setOnTime + setOffTime)) - setOnTime < 0) {
-        pwmWrite(LASER_PIN, map(setDura, 0, 1000000 / setFreq, 0, Timer4.getOverflow()));
-      } else {
-        pwmWrite(LASER_PIN, 0);
-      }
-      delay(1);
+      if ((millis() - startTime) % (setOnTime + setOffTime) < setOnTime) {
+        pwmWrite(LASER_PIN, pwmDuty);
+      } else pwmWrite(LASER_PIN, 0);
   }
 
   lastBTNstage = BTNstage;
